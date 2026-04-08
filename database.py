@@ -320,4 +320,4 @@ async def mark_congrats_sent(month: str):
         await db.execute(
             "UPDATE month_messages SET sent=1 WHERE month=?", (month,)
         )
-        await db.commit(
+        await db.commit()
