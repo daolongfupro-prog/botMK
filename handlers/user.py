@@ -85,7 +85,7 @@ async def cmd_start(msg: Message):
 
 
 @user_router.message(Command("my"))
-async def cmd_my(msg: Message):
+async def cmd_my(msg: Message, bot: Bot): # <-- ОБРАТИ ВНИМАНИЕ: добавили параметр bot: Bot
     uname = msg.from_user.username
     if not uname:
         await msg.answer("❌ Установите username в настройках Telegram.")
@@ -99,48 +99,26 @@ async def cmd_my(msg: Message):
     medals = await get_user_medals(uname)
     current_month = get_current_month()
 
-    # Разделяем по месяцам
     by_month: dict[str, list] = {}
     for m in medals:
         by_month.setdefault(m["month"], []).append(m)
 
     if not medals:
-        await msg.answer(
-            f"🏅 <b>{user['full_name']}</b>\n\n"
-            f"У вас пока нет жетонов. Вперёд — к первому! 💪",
-            parse_mode="HTML"
-        )
+        await msg.answer("🏅 У вас пока нет жетонов. Вперёд — к первому! 💪")
         return
 
-    text = f"🏅 <b>Жетоны {user['full_name']}</b>\n\n"
-
-    for month, items in sorted(by_month.items(), reverse=True):
-        dt = datetime.strptime(month, "%Y-%m")
-        month_name = dt.strftime("%B %Y")
-        is_current = month == current_month
-
-        contact = sum(1 for i in items if i["medal_type"] == "contact")
-        vklad   = sum(1 for i in items if i["medal_type"] == "vklad")
-        proryv  = sum(1 for i in items if i["medal_type"] == "proryv")
-        total   = sum(i["points"] for i in items)
-
-        if is_current:
-            text += f"📅 <b>{month_name}</b> (текущий)\n"
-            text += f"⭐ Контакт × {contact}  💛 Вклад × {vklad}  🔥 Прорыв × {proryv}\n"
-            text += f"💎 Итого: <b>{total} балл(ов)</b>\n\n"
-            # Детали текущего месяца
-            for i in items:
-                date_str = i["awarded_at"][:10]
-                cmt = f" — {i['comment']}" if i.get("comment") else ""
-                text += f"  {MEDAL_NAMES[i['medal_type']]} {date_str}{cmt}\n"
-            text += "\n"
-        else:
-            # Прошлые месяцы — ЧБ, только сводка
-            text += f"◻️ <i>{month_name}</i>\n"
-            text += f"★ ×{contact}  ♡ ×{vklad}  ✦ ×{proryv}  │  {total} балл(ов)\n\n"
-
-    await msg.answer(text, parse_mode="HTML")
-
+    # Генерируем картинку!
+    await msg.answer("⏳ Собираем вашу статистику...") # Пишем, чтобы пользователь не скучал, пока грузится
+    
+    image_bytes = await create_stat_image(bot, user, by_month, current_month)
+    photo = BufferedInputFile(image_bytes.read(), filename="stats.png")
+    
+    # Отправляем готовую картинку с короткой подписью
+    await msg.answer_photo(
+        photo=photo, 
+        caption=f"🏅 <b>Жетоны {user['full_name']}</b>", 
+        parse_mode="HTML"
+    )
 
 @user_router.message(Command("top"))
 async def cmd_top(msg: Message):
