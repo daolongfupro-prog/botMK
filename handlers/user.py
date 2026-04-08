@@ -1,6 +1,6 @@
 from aiogram.types import BufferedInputFile
 from image_generator import create_stat_image
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, PhotoSize
 from aiogram.filters import Command
 from database import (
