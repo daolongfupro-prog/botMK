@@ -1,8 +1,8 @@
 import io
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from aiogram import Bot
 
-# Пути к твоим картинкам
+# Пути к твоим картинкам (цветные и ЧБ)
 MEDAL_IMAGES = {
     "contact": {"color": "assets/contact_color.png", "bw": "assets/contact_bw.png"},
     "vklad": {"color": "assets/vklad_color.png", "bw": "assets/vklad_bw.png"},
@@ -10,12 +10,7 @@ MEDAL_IMAGES = {
 }
 
 async def create_stat_image(bot: Bot, user: dict, by_month: dict, current_month: str) -> io.BytesIO:
-    # 1. Создаем фон (например, темно-серый холст 800x600)
-    img_width, img_height = 800, 600
-    bg = Image.new('RGB', (img_width, img_height), color=(30, 30, 30))
-    draw = ImageDraw.Draw(bg)
-
-    # 2. Пытаемся скачать и вставить аватарку
+    # 1. Загрузка Аватарки (если она есть)
     if user.get("photo_file_id"):
         try:
             file = await bot.get_file(user["photo_file_id"])
@@ -23,23 +18,33 @@ async def create_stat_image(bot: Bot, user: dict, by_month: dict, current_month:
             await bot.download_file(file.file_path, avatar_bytes)
             
             avatar = Image.open(avatar_bytes).convert("RGBA")
-            avatar = avatar.resize((150, 150)) # Размер аватарки
-            bg.paste(avatar, (50, 50), mask=avatar if 'A' in avatar.getbands() else None)
+            # LANCZOS делает картинку гладкой при изменении размера
+            avatar = avatar.resize((150, 150), Image.Resampling.LANCZOS)
         except Exception as e:
             print(f"Ошибка загрузки фото: {e}")
-            
-    # Рисуем имя пользователя рядом с аватаркой (простым текстом, так как шрифты нужно загружать отдельно)
-    # По умолчанию PIL использует стандартный мелкий шрифт, но для тестов сойдет
-    draw.text((220, 110), f"Статистика: {user['full_name']}", fill=(255, 255, 255))
+            avatar = None
+    else:
+        avatar = None
 
-    # 3. Отрисовка жетонов
-    x_start = 50
-    y_start = 250
-    icon_size = 100 # Размер жетона на холсте
+    # 2. Создаем фон
+    # Берем с запасом по высоте, потом обрежем
+    bg_width, bg_height = 800, 1000 
+    bg = Image.new('RGB', (bg_width, bg_height), color=(30, 30, 30))
     
-    current_x = x_start
-    current_y = y_start
+    current_x = 50
+    current_y = 50
 
+    # 3. Вставляем аватарку
+    if avatar:
+        bg.paste(avatar, (current_x, current_y), avatar if 'A' in avatar.getbands() else None)
+        current_y += 180 # Сдвигаем координаты для жетонов ниже аватарки
+    
+    # Мы убрали отрисовку мелкого текста здесь, чтобы картинка была чище.
+    # Имя мы пишем в подписи к фото в Телеграме.
+
+    # 4. Отрисовка жетонов
+    icon_size = 120 # Размер жетона (чуть покрупнее)
+    
     for month, items in sorted(by_month.items(), reverse=True):
         is_current = (month == current_month)
         
@@ -52,8 +57,10 @@ async def create_stat_image(bot: Bot, user: dict, by_month: dict, current_month:
             if img_path:
                 try:
                     icon = Image.open(img_path).convert("RGBA")
-                    icon = icon.resize((icon_size, icon_size))
-                    # Накладываем жетон на фон с учетом прозрачности
+                    # LANCZOS - секрет качественного масштабирования без пикселей
+                    icon = icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+                    
+                    # Накладываем жетон. Параметр icon в конце (mask=icon) - ЭТО КЛЮЧ к прозрачности!
                     bg.paste(icon, (current_x, current_y), mask=icon)
                 except FileNotFoundError:
                     print(f"Файл {img_path} не найден!")
@@ -62,11 +69,18 @@ async def create_stat_image(bot: Bot, user: dict, by_month: dict, current_month:
             current_x += icon_size + 20
             
             # Если вышли за край картинки, переходим на новую строку
-            if current_x > img_width - icon_size - 50:
-                current_x = x_start
+            if current_x > bg_width - icon_size - 50:
+                current_x = 50
                 current_y += icon_size + 20
 
-    # 4. Сохраняем результат в оперативную память и возвращаем
+    # 5. Умная обрезка холста (убираем лишнюю черноту снизу)
+    # Определяем, где закончился последний элемент
+    final_height = current_y + icon_size + 50
+    # Если картинка получилась меньше, чем мы зарезервировали, обрезаем её
+    if final_height < bg_height:
+        bg = bg.crop((0, 0, bg_width, final_height))
+
+    # 6. Сохранение результата
     result_bytes = io.BytesIO()
     bg.save(result_bytes, format='PNG')
     result_bytes.seek(0)
