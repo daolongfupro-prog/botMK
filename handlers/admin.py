@@ -253,7 +253,7 @@ async def give_medal_comment(msg: Message, state: FSMContext):
                 user["telegram_id"],
                 f"🎉 <b>Вы получили жетон!</b>\n\n"
                 f"{MEDAL_NAMES[medal_type]} +{result['points']} балл(ов){cmt_text}\n\n"
-                f"от @{awarded_by} │ Метод Контакта",
+                f"от Александр Ложкин │ Метод Контакта",
                 parse_mode="HTML"
             )
         except Exception:
