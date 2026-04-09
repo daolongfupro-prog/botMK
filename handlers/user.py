@@ -1,7 +1,5 @@
 from aiogram.types import BufferedInputFile
 from image_generator import create_top_image # Импортируем нашу функцию
-
-from aiogram.types import BufferedInputFile
 from image_generator import create_stat_image
 
 from aiogram import Router, F, Bot
@@ -125,33 +123,29 @@ async def cmd_my(msg: Message, bot: Bot): # <-- ОБРАТИ ВНИМАНИЕ: �
     )
 
 @user_router.message(Command("top"))
-async def cmd_top(msg: Message):
-    uname = msg.from_user.username
+async def cmd_top(msg: Message, bot: Bot): # <-- Добавили bot: Bot, чтобы качать аватарки
     month = get_current_month()
     stats = await get_monthly_stats(month)
 
-    dt = datetime.strptime(month, "%Y-%m")
-    month_name = dt.strftime("%B %Y")
-
-    text = f"🏆 <b>Лидерборд — {month_name}</b>\n\n"
-    medals_top = ["🥇", "🥈", "🥉"]
-
-    for i, s in enumerate(stats):
-        prefix = medals_top[i] if i < 3 else f"{i+1}."
-        is_me = s["username"] == uname
-        name = f"<b>{s['full_name']}</b>" if is_me else s["full_name"]
-        you = " ← вы" if is_me else ""
-        text += (
-            f"{prefix} {name}{you}\n"
-            f"   ⭐×{s['contact_count']} 💛×{s['vklad_count']} 🔥×{s['proryv_count']} │ "
-            f"<b>{s['total_points']} балл(ов)</b>\n\n"
+    # Уведомляем пользователя, что картинка рисуется
+    await msg.answer("⏳ Собираю топ участников...")
+    
+    try:
+        # Генерируем изображение карточки Топ-листа
+        image_bytes = await create_top_image(bot, stats, month)
+        
+        # Создаем файл для отправки
+        photo = BufferedInputFile(image_bytes.read(), filename=f"top_{month}.png")
+        
+        # Отправляем готовую картинку с короткой подписью
+        await msg.message.answer_photo(
+            photo=photo,
+            caption=f"🏆 <b>Топ участников — {month}</b>",
+            parse_mode="HTML"
         )
-
-    if not stats:
-        text += "Пока нет данных за этот месяц."
-
-    await msg.answer(text, parse_mode="HTML")
-
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка генерации картинки: {e}")
+        print(f"Ошибка в cmd_top: {e}")
 
 @user_router.message(Command("setphoto"))
 async def cmd_setphoto(msg: Message):
