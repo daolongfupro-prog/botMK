@@ -138,7 +138,7 @@ async def cmd_top(msg: Message, bot: Bot): # <-- Добавили bot: Bot, чт
         photo = BufferedInputFile(image_bytes.read(), filename=f"top_{month}.png")
         
         # Отправляем готовую картинку с короткой подписью
-        await msg.message.answer_photo(
+        await msg.answer_photo(
             photo=photo,
             caption=f"🏆 <b>Топ участников — {month}</b>",
             parse_mode="HTML"
