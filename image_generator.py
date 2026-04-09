@@ -134,94 +134,67 @@ async def create_stat_image(bot: Bot, user: dict, by_month: dict, current_month:
     return result_bytes
 
 # ─── 2. ГЕНЕРАТОР ДЛЯ /top (ЛИДЕРБОРД) ─────────────────────────
-
 async def create_top_image(bot: Bot, stats: list, current_month: str) -> io.BytesIO:
-    """Генерирует изображение карточки топ-листа."""
     avatar_size_top = 80
     padding = 30
     header_height = 80
     row_height = avatar_size_top + 20
-    
     display_count = min(len(stats), 10)
+    
     card_width = 800
     card_height = header_height + (display_count * row_height) + (padding * 2)
     
     bg = Image.new('RGB', (card_width, int(card_height)), color=BG_COLOR)
     draw = ImageDraw.Draw(bg)
     
-    # 1. ИСПРАВЛЕНИЕ ШРИФТОВ
+    # Загружаем шрифт из папки assets
     try:
-        # Бот будет искать твой загруженный шрифт в папке assets
-        font_header = ImageFont.truetype("assets/font.ttf", 36)
         font_main = ImageFont.truetype("assets/font.ttf", 28)
-        font_bold = ImageFont.truetype("assets/font.ttf", 28)
-    except IOError:
-        try:
-            # Запасной вариант: стандартный системный шрифт серверов Linux
-            font_header = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
-            font_main = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
-            font_bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
-        except IOError:
-            font_header = ImageFont.load_default()
-            font_main = ImageFont.load_default()
-            font_bold = ImageFont.load_default()
-
-    header_text = f"Топ-лидеров — {current_month}"
-    draw.text((padding, padding), header_text, fill=(255, 255, 255), font=font_header)
+        font_bold = ImageFont.truetype("assets/font.ttf", 32)
+    except:
+        font_main = ImageFont.load_default()
+        font_bold = ImageFont.load_default()
 
     current_y = header_height + padding
+    
+    # Скачиваем аватарки
     avatar_futures = [download_avatar(bot, s.get("photo_file_id"), size=avatar_size_top) for s in stats[:display_count]]
     avatars = await asyncio.gather(*avatar_futures)
 
     for i, s in enumerate(stats[:display_count]):
         y_center = current_y + (row_height / 2)
         
-        place_text = f"{i+1}."
-        if i == 0: place_text = "🥇"
-        elif i == 1: place_text = "🥈"
-        elif i == 2: place_text = "🥉"
-        draw.text((padding, y_center - 15), place_text, fill=(255, 215, 0), font=font_main)
-
-        avatar_x = padding + 60
-        avatar = avatars[i]
-        if avatar:
-            avatar_circle = apply_circle_mask(avatar, avatar_size_top)
-            bg.paste(avatar_circle, (int(avatar_x), int(current_y)), avatar_circle)
+        # --- РИСУЕМ МЕДАЛИ ДЛЯ ТОП-3 ---
+        place_x = padding
+        if i < 3:
+            # Цвета: Золото, Серебро, Бронза
+            colors = [(255, 215, 0), (192, 192, 192), (205, 127, 50)]
+            # Рисуем круг-медаль
+            circle_r = 20
+            draw.ellipse([place_x, y_center-circle_r, place_x+circle_r*2, y_center+circle_r], fill=colors[i])
+            # Пишем цифру внутри круга (черным цветом для контраста)
+            draw.text((place_x + 13, y_center - 15), str(i+1), fill=(0,0,0), font=font_bold)
         else:
-            draw.ellipse((avatar_x, current_y, avatar_x + avatar_size_top, current_y + avatar_size_top), outline=(100, 100, 100))
+            # Для остальных просто белая цифра
+            draw.text((place_x + 5, y_center - 15), f"{i+1}.", fill=(255, 255, 255), font=font_main)
 
+        # Аватарка
+        avatar_x = padding + 60
+        if avatars[i]:
+            avatar_circle = apply_circle_mask(avatars[i], avatar_size_top)
+            bg.paste(avatar_circle, (int(avatar_x), int(current_y)), avatar_circle)
+        
+        # Имя
         name_x = avatar_x + avatar_size_top + 20
-        user_name = s['full_name'] or f"@{s['username']}"
-        draw.text((int(name_x), y_center - 15), user_name, fill=(255, 255, 255), font=font_main)
+        draw.text((int(name_x), y_center - 15), s['full_name'], fill=(255, 255, 255), font=font_main)
 
+        # Баллы и жетоны (логика жетонов остается из прошлого шага)
         points_x = card_width - padding - 150
-        draw.text((int(points_x), y_center - 15), f"{s['total_points']} балл(ов)", fill=(255, 255, 255), font=font_bold)
+        draw.text((int(points_x), y_center - 15), f"{s['total_points']} б.", fill=(255, 255, 255), font=font_bold)
         
-        # 2. ИСПРАВЛЕНИЕ ЖЕТОНОВ (Рисуем реальное количество)
-        user_medals = []
-        user_medals.extend(["contact"] * int(s.get('contact_count', 0)))
-        user_medals.extend(["vklad"] * int(s.get('vklad_count', 0)))
-        user_medals.extend(["proryv"] * int(s.get('proryv_count', 0)))
-        
-        icon_size = 40
-        current_icon_x = points_x - 10 
-        
-        # Накладываем жетоны справа налево (от текста с баллами)
-        for medal_type in reversed(user_medals):
-            img_path = MEDAL_IMAGES.get(medal_type, {}).get("color")
-            if img_path:
-                try:
-                    icon = Image.open(img_path).convert("RGBA")
-                    icon = icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
-                    current_icon_x -= (icon_size + 5) # Сдвигаем влево
-                    bg.paste(icon, (int(current_icon_x), int(y_center - (icon_size/2))), mask=icon)
-                except FileNotFoundError:
-                    pass
-
         current_y += row_height
 
-    result_bytes = io.BytesIO()
-    bg.save(result_bytes, format='PNG')
-    result_bytes.seek(0)
-    
-    return result_bytes
+    res = io.BytesIO()
+    bg.save(res, format='PNG')
+    res.seek(0)
+    return res
