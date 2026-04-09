@@ -134,6 +134,7 @@ async def create_stat_image(bot: Bot, user: dict, by_month: dict, current_month:
     return result_bytes
 
 # ─── 2. ГЕНЕРАТОР ДЛЯ /top (ЛИДЕРБОРД) ─────────────────────────
+# ─── 2. ГЕНЕРАТОР ДЛЯ /top (ЛИДЕРБОРД) ─────────────────────────
 async def create_top_image(bot: Bot, stats: list, current_month: str) -> io.BytesIO:
     avatar_size_top = 80
     padding = 30
@@ -154,6 +155,10 @@ async def create_top_image(bot: Bot, stats: list, current_month: str) -> io.Byte
     except:
         font_main = ImageFont.load_default()
         font_bold = ImageFont.load_default()
+
+    # 1. ВОЗВРАЩАЕМ ЗАГОЛОВОК
+    header_text = f"Топ лидеров — {current_month}"
+    draw.text((padding, padding), header_text, fill=(255, 255, 255), font=font_main)
 
     current_y = header_height + padding
     
@@ -183,15 +188,38 @@ async def create_top_image(bot: Bot, stats: list, current_month: str) -> io.Byte
         if avatars[i]:
             avatar_circle = apply_circle_mask(avatars[i], avatar_size_top)
             bg.paste(avatar_circle, (int(avatar_x), int(current_y)), avatar_circle)
+        else:
+            # Рисуем пустой круг, если аватарки нет
+            draw.ellipse((avatar_x, current_y, avatar_x + avatar_size_top, current_y + avatar_size_top), outline=(100, 100, 100))
         
         # Имя
         name_x = avatar_x + avatar_size_top + 20
         draw.text((int(name_x), y_center - 15), s['full_name'], fill=(255, 255, 255), font=font_main)
 
-        # Баллы и жетоны (логика жетонов остается из прошлого шага)
+        # 2. ВОЗВРАЩАЕМ ПРАВИЛЬНЫЙ ТЕКСТ БАЛЛОВ
         points_x = card_width - padding - 150
-        draw.text((int(points_x), y_center - 15), f"{s['total_points']} б.", fill=(255, 255, 255), font=font_bold)
+        draw.text((int(points_x), y_center - 15), f"{s['total_points']} балл(ов)", fill=(255, 255, 255), font=font_bold)
         
+        # 3. ВОЗВРАЩАЕМ ЖЕТОНЫ
+        user_medals = []
+        user_medals.extend(["contact"] * int(s.get('contact_count', 0)))
+        user_medals.extend(["vklad"] * int(s.get('vklad_count', 0)))
+        user_medals.extend(["proryv"] * int(s.get('proryv_count', 0)))
+        
+        icon_size = 40
+        current_icon_x = points_x - 10 
+        
+        for medal_type in reversed(user_medals):
+            img_path = MEDAL_IMAGES.get(medal_type, {}).get("color")
+            if img_path:
+                try:
+                    icon = Image.open(img_path).convert("RGBA")
+                    icon = icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+                    current_icon_x -= (icon_size + 5) 
+                    bg.paste(icon, (int(current_icon_x), int(y_center - (icon_size/2))), mask=icon)
+                except FileNotFoundError:
+                    pass
+
         current_y += row_height
 
     res = io.BytesIO()
