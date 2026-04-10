@@ -8,7 +8,7 @@ from image_generator import create_top_image, create_stat_image
 from database import (
     get_user, update_user_tg_id, update_user_photo,
     get_user_medals, get_monthly_stats, get_current_month,
-    MEDAL_NAMES, is_admin, get_all_admins  # <-- Добавил get_all_admins, чтобы не крашился /top
+    MEDAL_NAMES, is_admin, get_all_admins
 )
 
 user_router = Router()
@@ -41,17 +41,26 @@ async def cmd_start(msg: Message):
     user_stat = next((s for s in stats if s["username"] == uname), None)
     pts = user_stat["total_points"] if user_stat else 0
 
-    # Чистый текст приветствия без статусов
+    # Проверяем, админ ли это
+    adm = await is_admin(uname)
+
+    # Формируем динамическое приветствие
     text = (
         f"👋 Привет, <b>{user['full_name']}</b>!\n\n"
         f"🏅 Сообщество: <b>{COMMUNITY}</b>\n"
         f"💎 Баллов в этом месяце: <b>{pts}</b>\n\n"
-        f"📋 Мои команды:\n"
-        f"/my — мои жетоны\n"
-        f"/top — лидерборд\n"
-        f"/setphoto — загрузить фото\n"
-        f"/help — помощь"
+        f"📋 Доступные команды:\n"
     )
+
+    # Если админ - показываем админку, скрываем личное
+    if adm:
+        text += f"/admin — панель управления\n"
+    else:
+        text += f"/my — мои жетоны\n"
+        text += f"/setphoto — загрузить фото\n"
+        
+    text += f"/top — лидерборд\n"
+    text += f"/help — помощь"
 
     if user.get("photo_file_id"):
         await msg.answer_photo(user["photo_file_id"], caption=text, parse_mode="HTML")
@@ -155,17 +164,18 @@ async def handle_photo(msg: Message):
 async def cmd_help(msg: Message):
     uname = msg.from_user.username
     adm = await is_admin(uname) if uname else False
-    text = (
-        f"📖 <b>Команды участника — {COMMUNITY}</b>\n\n"
-        f"/start — главная страница профиля\n"
-        f"/my — все мои жетоны по месяцам\n"
-        f"/top — лидерборд текущего месяца\n"
-        f"/setphoto — загрузить фото профиля\n"
-        f"/help — эта справка\n"
-    )
+    
+    text = f"📖 <b>Помощь — {COMMUNITY}</b>\n\n"
+    text += f"/start — главная страница профиля\n"
+    text += f"/top — лидерборд текущего месяца\n"
+    text += f"/help — эта справка\n"
+    
     if adm:
-        text += (
-            f"\n👑 <b>Команды администратора</b>\n"
-            f"/admin — панель управления\n"
-        )
+        text += f"\n👑 <b>Команды администратора</b>\n"
+        text += f"/admin — панель управления\n"
+    else:
+        text += f"\n🏅 <b>Команды участника</b>\n"
+        text += f"/my — все мои жетоны по месяцам\n"
+        text += f"/setphoto — загрузить фото профиля\n"
+
     await msg.answer(text, parse_mode="HTML")
