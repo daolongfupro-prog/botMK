@@ -1,8 +1,13 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Router, F, Bot
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from datetime import datetime
+import openpyxl, io
+
+# Импортируем генераторы картинок для админки
+from image_generator import create_top_image, create_stat_image
 from database import (
     get_user, get_all_users, add_user, remove_user,
     award_medal, cancel_last_medal, check_weekly_limit,
@@ -10,8 +15,6 @@ from database import (
     add_admin, remove_admin, get_all_admins, is_admin, is_owner,
     save_congrats, MEDAL_NAMES, MEDAL_LIMITS
 )
-from datetime import datetime
-import openpyxl, io
 
 admin_router = Router()
 
@@ -32,89 +35,79 @@ class AdminMgmt(StatesGroup):
 class CongratsWrite(StatesGroup):
     waiting_text = State()
 
-# ─── Проверка прав ───────────────────────────────────────────
-async def check_admin(msg: Message) -> bool:
-    uname = msg.from_user.username
+# ─── Вспомогательные функции и проверки ──────────────────────
+def back_button_kb() -> InlineKeyboardMarkup:
+    """Универсальная кнопка Назад"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="cancel_admin_action")]
+    ])
+
+async def check_admin_cb(cb: CallbackQuery) -> bool:
+    uname = cb.from_user.username
     if not uname or not await is_admin(uname):
-        await msg.answer("⛔ У вас нет прав администратора.")
+        await cb.answer("⛔ У вас нет прав администратора.", show_alert=True)
         return False
     return True
 
-async def check_owner(msg: Message) -> bool:
-    uname = msg.from_user.username
+async def check_owner_cb(cb: CallbackQuery) -> bool:
+    uname = cb.from_user.username
     if not uname or not await is_owner(uname):
-        await msg.answer("⛔ Только владелец может выполнить это действие.")
+        await cb.answer("⛔ Только владелец может это сделать.", show_alert=True)
         return False
     return True
 
-# ─── ГЛАВНОЕ МЕНЮ И НАВИГАЦИЯ ────────────────────────────────
+# ─── ГЛАВНОЕ МЕНЮ ────────────────────────────────────────────
 def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏅 Начислить жетон",  callback_data="give_medal")],
-        [InlineKeyboardButton(text="👥 Список участников", callback_data="list_users")],
+        [InlineKeyboardButton(text="🗑 Снять жетон",      callback_data="revoke_medal")],
+        [InlineKeyboardButton(text="👥 Участники (Карточки)", callback_data="list_users")],
         [InlineKeyboardButton(text="➕ Добавить участника", callback_data="add_user")],
         [InlineKeyboardButton(text="➖ Удалить участника",  callback_data="remove_user")],
-        [InlineKeyboardButton(text="📊 Статистика месяца", callback_data="month_stats")],
-        [InlineKeyboardButton(text="📤 Бэкап данных",       callback_data="backup")],
-        [InlineKeyboardButton(text="👑 Управление админами",callback_data="manage_admins")],
-    ])
-
-def back_button_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="cancel_admin_action")]
+        [InlineKeyboardButton(text="📊 Итоги месяца", callback_data="month_stats")],
+        [InlineKeyboardButton(text="📤 Excel Бэкап",       callback_data="backup")],
+        [InlineKeyboardButton(text="👑 Управление админами", callback_data="manage_admins")],
     ])
 
 @admin_router.message(Command("admin"))
 async def cmd_admin(msg: Message, state: FSMContext):
     await state.clear()
-    if not await check_admin(msg): return
-    await msg.answer("👑 <b>Панель администратора — Метод Контакта</b>", 
+    uname = msg.from_user.username
+    if not uname or not await is_admin(uname):
+        await msg.answer("⛔ У вас нет прав администратора.")
+        return
+    await msg.answer("👑 <b>Панель управления Метод Контакта</b>", 
                      parse_mode="HTML", reply_markup=admin_menu_kb())
 
 @admin_router.callback_query(F.data == "cancel_admin_action")
 async def cb_cancel_admin_action(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.message.edit_text("👑 <b>Панель администратора — Метод Контакта</b>", 
+    await cb.message.edit_text("👑 <b>Панель управления Метод Контакта</b>", 
                                parse_mode="HTML", reply_markup=admin_menu_kb())
     await cb.answer()
 
-# ─── ГЕНЕРАТОР СПИСКА УЧАСТНИКОВ (КНОПКИ) ────────────────────
+# ─── ГЕНЕРАТОР СПИСКА УЧАСТНИКОВ (ФИЛЬТРАЦИЯ АДМИНОВ) ────────
 async def users_list_kb(action_prefix: str) -> InlineKeyboardMarkup:
     users = await get_all_users()
+    admins = await get_all_admins()
+    admin_usernames = [a["username"] for a in admins]
+    
+    # Оставляем только обычных участников (чистим от админов и организатора)
+    pure_users = [u for u in users if u["username"] not in admin_usernames]
+
     keyboard = []
-    for u in users:
+    for u in pure_users:
         btn_text = f"{u['full_name']} (@{u['username']})"
         cb_data = f"{action_prefix}_{u['username']}"
         keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=cb_data)])
         
-    keyboard.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_admin_action")])
+    keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="cancel_admin_action")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-# ─── СПИСОК УЧАСТНИКОВ ───────────────────────────────────────
-@admin_router.callback_query(F.data == "list_users")
-async def cb_list_users(cb: CallbackQuery):
-    if not await is_admin(cb.from_user.username):
-        await cb.answer("⛔ Нет доступа", show_alert=True); return
-
-    month = get_current_month()
-    stats = await get_monthly_stats(month)
-    dt = datetime.strptime(month, "%Y-%m")
-
-    text = f"👥 <b>Участники — {dt.strftime('%B %Y')}</b>\n\n"
-    for i, s in enumerate(stats, 1):
-        text += (
-            f"{i}. @{s['username']} — {s['full_name']}\n"
-            f"   ⭐×{s['contact_count']} 💛×{s['vklad_count']} 🔥×{s['proryv_count']} "
-            f"│ <b>{s['total_points']} балл(ов)</b>\n"
-        )
-    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_button_kb())
-    await cb.answer()
 
 # ─── ДОБАВИТЬ УЧАСТНИКА ──────────────────────────────────────
 @admin_router.callback_query(F.data == "add_user")
 async def cb_add_user(cb: CallbackQuery, state: FSMContext):
-    if not await is_admin(cb.from_user.username):
-        await cb.answer("⛔ Нет доступа", show_alert=True); return
+    if not await check_admin_cb(cb): return
     await cb.message.edit_text("➕ Введите @username нового участника (без @):", reply_markup=back_button_kb())
     await state.set_state(AddUser.waiting_username)
     await cb.answer()
@@ -123,7 +116,7 @@ async def cb_add_user(cb: CallbackQuery, state: FSMContext):
 async def add_user_username(msg: Message, state: FSMContext):
     uname = msg.text.strip().lstrip("@")
     await state.update_data(username=uname)
-    await msg.answer(f"Введите полное имя для @{uname}:")
+    await msg.answer(f"Введите полное имя для @{uname}:", reply_markup=back_button_kb())
     await state.set_state(AddUser.waiting_fullname)
 
 @admin_router.message(AddUser.waiting_fullname)
@@ -140,22 +133,34 @@ async def add_user_fullname(msg: Message, state: FSMContext):
 
 # ─── УДАЛИТЬ УЧАСТНИКА ───────────────────────────────────────
 @admin_router.callback_query(F.data == "remove_user")
-async def cb_remove_user(cb: CallbackQuery, state: FSMContext):
-    if not await is_admin(cb.from_user.username):
-        await cb.answer("⛔ Нет доступа", show_alert=True); return
-    
+async def cb_remove_user(cb: CallbackQuery):
+    if not await check_admin_cb(cb): return
     kb = await users_list_kb("rm_user")
     await cb.message.edit_text("➖ <b>Выберите участника для удаления:</b>", parse_mode="HTML", reply_markup=kb)
     await cb.answer()
 
 @admin_router.callback_query(F.data.startswith("rm_user_"))
-async def process_remove_user(cb: CallbackQuery, state: FSMContext):
+async def process_remove_user(cb: CallbackQuery):
     uname = cb.data.replace("rm_user_", "")
     ok = await remove_user(uname)
-    if ok:
-        await cb.message.edit_text(f"✅ Участник @{uname} деактивирован. Данные сохранены.", reply_markup=back_button_kb())
-    else:
-        await cb.message.edit_text(f"❌ Участник @{uname} не найден.", reply_markup=back_button_kb())
+    text = f"✅ Участник @{uname} деактивирован." if ok else f"❌ Участник @{uname} не найден."
+    await cb.message.edit_text(text, reply_markup=back_button_kb())
+    await cb.answer()
+
+# ─── СНЯТЬ ЖЕТОН (ОТКАТ) ─────────────────────────────────────
+@admin_router.callback_query(F.data == "revoke_medal")
+async def cb_revoke_medal(cb: CallbackQuery):
+    if not await check_admin_cb(cb): return
+    kb = await users_list_kb("rev_medal")
+    await cb.message.edit_text("🗑 <b>Выберите участника для отмены последнего жетона:</b>", parse_mode="HTML", reply_markup=kb)
+    await cb.answer()
+
+@admin_router.callback_query(F.data.startswith("rev_medal_"))
+async def process_revoke_medal(cb: CallbackQuery):
+    uname = cb.data.replace("rev_medal_", "")
+    ok = await cancel_last_medal(uname)
+    text = f"✅ Последнее начисление для @{uname} успешно отменено." if ok else f"❌ У пользователя @{uname} нет жетонов для отмены."
+    await cb.message.edit_text(text, reply_markup=back_button_kb())
     await cb.answer()
 
 # ─── НАЧИСЛИТЬ ЖЕТОН ─────────────────────────────────────────
@@ -164,7 +169,7 @@ def medal_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⭐ Контакт (1 балл)",  callback_data="medal_contact")],
         [InlineKeyboardButton(text="💛 Вклад (1 балл)",    callback_data="medal_vklad")],
         [InlineKeyboardButton(text="🔥 Прорыв (2 балла)",  callback_data="medal_proryv")],
-        [InlineKeyboardButton(text="❌ Отмена",             callback_data="cancel_admin_action")],
+        [InlineKeyboardButton(text="◀️ Назад",             callback_data="cancel_admin_action")],
     ])
 
 def confirm_overlimit_kb() -> InlineKeyboardMarkup:
@@ -174,27 +179,21 @@ def confirm_overlimit_kb() -> InlineKeyboardMarkup:
     ])
 
 @admin_router.callback_query(F.data == "give_medal")
-async def cb_give_medal(cb: CallbackQuery, state: FSMContext):
-    if not await is_admin(cb.from_user.username):
-        await cb.answer("⛔ Нет доступа", show_alert=True); return
-        
-    kb = await users_list_kb("medal_user")
+async def cb_give_medal(cb: CallbackQuery):
+    if not await check_admin_cb(cb): return
+    kb = await users_list_kb("give_medal")
     await cb.message.edit_text("🏅 <b>Выберите участника для начисления жетона:</b>", parse_mode="HTML", reply_markup=kb)
     await cb.answer()
 
-@admin_router.callback_query(F.data.startswith("medal_user_"))
+@admin_router.callback_query(F.data.startswith("give_medal_"))
 async def process_user_for_medal(cb: CallbackQuery, state: FSMContext):
-    uname = cb.data.replace("medal_user_", "")
+    uname = cb.data.replace("give_medal_", "")
     user = await get_user(uname)
-    
     if not user:
         await cb.answer("❌ Пользователь не найден", show_alert=True); return
         
     await state.update_data(target_username=uname, target_name=user["full_name"])
-    await cb.message.edit_text(
-        f"👤 Участник: <b>{user['full_name']}</b> (@{uname})\n\nВыберите тип жетона:",
-        parse_mode="HTML", reply_markup=medal_kb()
-    )
+    await cb.message.edit_text(f"👤 Участник: <b>{user['full_name']}</b>\n\nВыберите тип жетона:", parse_mode="HTML", reply_markup=medal_kb())
     await state.set_state(GiveMedal.waiting_medal)
     await cb.answer()
 
@@ -202,7 +201,7 @@ async def process_user_for_medal(cb: CallbackQuery, state: FSMContext):
 async def give_medal_type(cb: CallbackQuery, state: FSMContext):
     medal_type = cb.data.replace("medal_", "")
     await state.update_data(medal_type=medal_type)
-
+    
     data = await state.get_data()
     uname = data["target_username"]
     pts = MEDAL_LIMITS[medal_type]["points_per"]
@@ -213,15 +212,14 @@ async def give_medal_type(cb: CallbackQuery, state: FSMContext):
             f"⚠️ <b>Превышение недельного лимита!</b>\n\n"
             f"Участник: @{uname}\n"
             f"Жетон: {MEDAL_NAMES[medal_type]}\n"
-            f"Использовано баллов: <b>{limit['used']}</b> из <b>{limit['max']}</b>\n\n"
+            f"Использовано: <b>{limit['used']}</b> из <b>{limit['max']}</b>\n\n"
             f"Продолжить или отменить?",
             parse_mode="HTML", reply_markup=confirm_overlimit_kb()
         )
         await state.set_state(GiveMedal.confirm_overlimit)
     else:
         await cb.message.edit_text(
-            f"✏️ Напишите комментарий к жетону {MEDAL_NAMES[medal_type]}\n"
-            f"(или отправьте <i>-</i> чтобы пропустить):",
+            f"✏️ Напишите комментарий к жетону {MEDAL_NAMES[medal_type]}\n(или отправьте <i>-</i> чтобы пропустить):",
             parse_mode="HTML", reply_markup=back_button_kb()
         )
         await state.set_state(GiveMedal.waiting_comment)
@@ -239,194 +237,161 @@ async def overlimit_yes(cb: CallbackQuery, state: FSMContext):
 @admin_router.message(GiveMedal.waiting_comment)
 async def give_medal_comment(msg: Message, state: FSMContext):
     comment = msg.text.strip()
-    if comment == "-":
-        comment = ""
+    if comment == "-": comment = ""
+    
     data = await state.get_data()
-    uname = data["target_username"]
-    name  = data["target_name"]
-    medal_type = data["medal_type"]
+    uname, name, medal_type = data["target_username"], data["target_name"], data["medal_type"]
     awarded_by = msg.from_user.username or "admin"
 
     result = await award_medal(uname, medal_type, comment, awarded_by)
 
     await msg.answer(
-        f"✅ Жетон начислен!\n\n"
-        f"👤 {name} (@{uname})\n"
-        f"{MEDAL_NAMES[medal_type]} +{result['points']} балл(ов)\n"
-        f"{'💬 ' + comment if comment else ''}",
+        f"✅ Жетон начислен!\n\n👤 {name} (@{uname})\n{MEDAL_NAMES[medal_type]} +{result['points']} балл(ов)\n{'💬 ' + comment if comment else ''}",
         parse_mode="HTML", reply_markup=back_button_kb()
     )
 
-    # Уведомляем участника
     user = await get_user(uname)
     if user and user.get("telegram_id"):
         try:
             cmt_text = f"\n💬 <i>{comment}</i>" if comment else ""
             await msg.bot.send_message(
                 user["telegram_id"],
-                f"🎉 <b>Вы получили жетон!</b>\n\n"
-                f"{MEDAL_NAMES[medal_type]} +{result['points']} балл(ов){cmt_text}\n\n"
-                f"от {msg.from_user.full_name} │ Метод Контакта",
+                f"🎉 <b>Вы получили жетон!</b>\n\n{MEDAL_NAMES[medal_type]} +{result['points']} балл(ов){cmt_text}\n\nот Метод Контакта",
                 parse_mode="HTML"
             )
-        except Exception:
-            pass
-
+        except Exception: pass
     await state.clear()
 
-# ─── ОТМЕНА ПОСЛЕДНЕГО НАЧИСЛЕНИЯ ───────────────────────────
-@admin_router.message(Command("cancel_last"))
-async def cmd_cancel_last(msg: Message):
-    if not await check_admin(msg): return
-    parts = msg.text.split()
-    if len(parts) < 2:
-        await msg.answer("Использование: /cancel_last @username")
-        return
-    uname = parts[1].lstrip("@")
-    ok = await cancel_last_medal(uname)
-    if ok:
-        await msg.answer(f"✅ Последнее начисление для @{uname} отменено.")
-    else:
-        await msg.answer(f"❌ Нет начислений для @{uname}.")
+# ─── КАРТОЧКИ УЧАСТНИКОВ ─────────────────────────────────────
+@admin_router.callback_query(F.data == "list_users")
+async def cb_list_users(cb: CallbackQuery):
+    if not await check_admin_cb(cb): return
+    kb = await users_list_kb("show_card")
+    await cb.message.edit_text("👥 <b>Выберите участника для просмотра карточки:</b>", parse_mode="HTML", reply_markup=kb)
+    await cb.answer()
 
-# ─── ИСТОРИЯ УЧАСТНИКА ───────────────────────────────────────
-@admin_router.message(Command("history"))
-async def cmd_history(msg: Message):
-    if not await check_admin(msg): return
-    parts = msg.text.split()
-    if len(parts) < 2:
-        await msg.answer("Использование: /history @username")
-        return
-    uname = parts[1].lstrip("@")
-    history = await get_user_history(uname, 20)
-    if not history:
-        await msg.answer(f"📭 Нет истории для @{uname}.")
-        return
-    text = f"📋 <b>История @{uname}</b>\n\n"
-    for h in history:
-        date_str = h["awarded_at"][:10]
-        cmt = f" — {h['comment']}" if h.get("comment") else ""
-        text += f"{date_str} {MEDAL_NAMES[h['medal_type']]} +{h['points']}{cmt}\n"
-    await msg.answer(text, parse_mode="HTML")
+@admin_router.callback_query(F.data.startswith("show_card_"))
+async def show_user_card(cb: CallbackQuery, bot: Bot):
+    uname = cb.data.replace("show_card_", "")
+    user = await get_user(uname)
+    medals = await get_user_history(uname, 1000)
+    
+    # Группируем по месяцам для графики
+    by_month = {}
+    for m in medals: 
+        m_month = m.get("month", m["awarded_at"][:7])
+        by_month.setdefault(m_month, []).append(m)
+        
+    await cb.message.edit_text("⏳ Генерирую карточку участника...")
+    image_bytes = await create_stat_image(bot, user, by_month, get_current_month())
+    photo = BufferedInputFile(image_bytes.read(), filename="card.png")
+    
+    await cb.message.answer_photo(photo=photo, caption=f"👤 Карточка участника: {user['full_name']}", reply_markup=back_button_kb())
+    await cb.message.delete()
+    await cb.answer()
 
-# ─── СТАТИСТИКА МЕСЯЦА И ПОЗДРАВЛЕНИЕ ───────────────────────
+# ─── СТАТИСТИКА МЕСЯЦА (СВЕТЛАЯ ТЕМА) ────────────────────────
 @admin_router.callback_query(F.data == "month_stats")
-async def cb_month_stats(cb: CallbackQuery):
-    if not await is_admin(cb.from_user.username):
-        await cb.answer("⛔ Нет доступа", show_alert=True); return
-
+async def cb_month_stats(cb: CallbackQuery, bot: Bot):
+    if not await check_admin_cb(cb): return
+    
     month = get_current_month()
-    stats = await get_monthly_stats(month)
-    dt = datetime.strptime(month, "%Y-%m")
-    text = f"📊 <b>Итоги — {dt.strftime('%B %Y')}</b>\n\n"
+    all_stats = await get_monthly_stats(month)
+    
+    # Чистим от админов
+    admins = await get_all_admins()
+    admin_usernames = [a["username"] for a in admins]
+    stats = [s for s in all_stats if s.get("username") not in admin_usernames]
 
-    medals_top = ["🥇", "🥈", "🥉"]
-    for i, s in enumerate(stats):
-        prefix = medals_top[i] if i < 3 else f"{i+1}."
-        text += (
-            f"{prefix} <b>{s['full_name']}</b> (@{s['username']})\n"
-            f"   ⭐×{s['contact_count']} 💛×{s['vklad_count']} 🔥×{s['proryv_count']} "
-            f"│ <b>{s['total_points']} балл(ов)</b>\n\n"
-        )
-
+    await cb.message.edit_text("⏳ Генерирую лидерборд...")
+    image_bytes = await create_top_image(bot, stats, month)
+    photo = BufferedInputFile(image_bytes.read(), filename="top.png")
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✍️ Написать поздравление", callback_data="write_congrats")],
-        [InlineKeyboardButton(text="🤖 Бот поздравит сам",      callback_data="bot_congrats")],
-        [InlineKeyboardButton(text="◀️ Назад в меню",          callback_data="cancel_admin_action")]
+        [InlineKeyboardButton(text="🤖 Бот поздравит сам",       callback_data="bot_congrats")],
+        [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="cancel_admin_action")]
     ])
-    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    
+    await cb.message.answer_photo(photo=photo, caption=f"📊 Итоги месяца — {month}", reply_markup=kb)
+    await cb.message.delete()
     await cb.answer()
 
 @admin_router.callback_query(F.data == "write_congrats")
 async def cb_write_congrats(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text(
-        "✍️ Напишите текст поздравления.\n"
-        "Бот отправит его 1-го числа в группу и топ-3 лично:",
-        reply_markup=back_button_kb()
-    )
+    await cb.message.edit_text("✍️ Напишите текст поздравления:", reply_markup=back_button_kb())
     await state.set_state(CongratsWrite.waiting_text)
     await cb.answer()
 
 @admin_router.message(CongratsWrite.waiting_text)
 async def save_congrats_handler(msg: Message, state: FSMContext):
-    month = get_current_month()
-    author = msg.from_user.username or "admin"
-    await save_congrats(month, msg.text.strip(), author)
-    await msg.answer(
-        "✅ Поздравление сохранено! Будет отправлено 1-го числа следующего месяца.",
-        reply_markup=back_button_kb()
-    )
+    await save_congrats(get_current_month(), msg.text.strip(), msg.from_user.username or "admin")
+    await msg.answer("✅ Поздравление сохранено!", reply_markup=back_button_kb())
     await state.clear()
 
 @admin_router.callback_query(F.data == "bot_congrats")
 async def cb_bot_congrats(cb: CallbackQuery):
-    month = get_current_month()
-    await save_congrats(month, "", "bot")
+    await save_congrats(get_current_month(), "", "bot")
     await cb.message.edit_text(
         "✅ Понял! Бот сам составит поздравление и отправит 1-го числа.",
         reply_markup=back_button_kb()
     )
     await cb.answer()
 
-# ─── БЭКАП ───────────────────────────────────────────────────
+# ─── EXCEL БЭКАП ─────────────────────────────────────────────
 @admin_router.callback_query(F.data == "backup")
-async def cb_backup(cb: CallbackQuery):
-    if not await is_admin(cb.from_user.username):
-        await cb.answer("⛔ Нет доступа", show_alert=True); return
-    await cb.message.edit_text("📤 Формирую бэкап...", reply_markup=back_button_kb())
-    await send_backup(cb.message.bot, cb.from_user.id)
+async def cb_backup(cb: CallbackQuery, bot: Bot):
+    if not await check_admin_cb(cb): return
+    await cb.message.edit_text("📤 Формирую Excel файл...")
+    await send_backup(bot, cb.from_user.id)
+    await cb.message.edit_text("✅ Бэкап успешно отправлен.", reply_markup=back_button_kb())
     await cb.answer()
 
 @admin_router.message(Command("backup"))
-async def cmd_backup(msg: Message):
-    if not await check_admin(msg): return
-    await msg.answer("📤 Формирую бэкап...")
-    await send_backup(msg.bot, msg.from_user.id)
+async def cmd_backup(msg: Message, bot: Bot):
+    uname = msg.from_user.username
+    if not uname or not await is_admin(uname): return
+    await msg.answer("📤 Формирую Excel файл...")
+    await send_backup(bot, msg.from_user.id)
 
-async def send_backup(bot, chat_id: int):
-    from database import get_all_users, get_user_history
-    month = get_current_month()
-    stats = await get_monthly_stats(month)
+async def send_backup(bot: Bot, chat_id: int):
     users = await get_all_users()
+    admins = await get_all_admins()
+    admin_usernames = [a["username"] for a in admins]
+    
+    # Исключаем админов из бэкапа
+    pure_users = [u for u in users if u["username"] not in admin_usernames]
 
     wb = openpyxl.Workbook()
-
-    ws1 = wb.active
-    ws1.title = f"Статистика {month}"
-    ws1.append(["Место", "Username", "Имя", "Контакт", "Вклад", "Прорыв", "Итого баллов"])
-    for i, s in enumerate(stats, 1):
-        ws1.append([i, s["username"], s["full_name"],
-                    s["contact_count"], s["vklad_count"], s["proryv_count"], s["total_points"]])
-
-    ws2 = wb.create_sheet("История начислений")
-    ws2.append(["Дата", "Username", "Имя", "Жетон", "Баллы", "Комментарий", "Начислил"])
-    for u in users:
-        history = await get_user_history(u["username"], 100)
+    ws = wb.active
+    ws.title = "Жетоны"
+    ws.append(["Дата", "Месяц", "Участник", "Тип жетона", "Баллы", "Комментарий"])
+    
+    for u in pure_users:
+        history = await get_user_history(u["username"], 500)
         for h in history:
-            ws2.append([
-                h["awarded_at"][:10], h["username"], u["full_name"],
+            month_str = h.get("month", h["awarded_at"][:7])
+            ws.append([
+                h["awarded_at"][:10], month_str, u["full_name"],
                 MEDAL_NAMES.get(h["medal_type"], h["medal_type"]),
-                h["points"], h.get("comment", ""), h.get("awarded_by", "")
+                h["points"], h.get("comment", "")
             ])
 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-
-    from aiogram.types import BufferedInputFile
+    
     dt_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
     await bot.send_document(
         chat_id,
-        BufferedInputFile(buf.read(), filename=f"backup_kontakt_{dt_str}.xlsx"),
-        caption=f"📊 Бэкап данных — {dt_str}"
+        BufferedInputFile(buf.read(), filename=f"Backup_Kontakt_{dt_str}.xlsx"),
+        caption=f"📊 Полная выгрузка базы данных"
     )
 
-# ─── УПРАВЛЕНИЕ АДМИНИСТРАТОРАМИ ─────────────────────────────
+# ─── УПРАВЛЕНИЕ АДМИНАМИ ─────────────────────────────────────
 @admin_router.callback_query(F.data == "manage_admins")
 async def cb_manage_admins(cb: CallbackQuery):
-    if not await is_owner(cb.from_user.username):
-        await cb.answer("⛔ Только владелец", show_alert=True); return
-
+    if not await check_owner_cb(cb): return
     admins = await get_all_admins()
     text = "👑 <b>Администраторы</b>\n\n"
     for a in admins:
@@ -443,8 +408,7 @@ async def cb_manage_admins(cb: CallbackQuery):
 
 @admin_router.callback_query(F.data == "add_admin")
 async def cb_add_admin(cb: CallbackQuery, state: FSMContext):
-    if not await is_owner(cb.from_user.username):
-        await cb.answer("⛔ Только владелец", show_alert=True); return
+    if not await check_owner_cb(cb): return
     await cb.message.edit_text("Введите @username нового администратора (без @):", reply_markup=back_button_kb())
     await state.set_state(AdminMgmt.waiting_add)
     await cb.answer()
@@ -453,16 +417,13 @@ async def cb_add_admin(cb: CallbackQuery, state: FSMContext):
 async def do_add_admin(msg: Message, state: FSMContext):
     uname = msg.text.strip().lstrip("@")
     ok = await add_admin(uname, msg.from_user.username)
-    if ok:
-        await msg.answer(f"✅ @{uname} назначен администратором.", reply_markup=back_button_kb())
-    else:
-        await msg.answer(f"⚠️ @{uname} уже является администратором.", reply_markup=back_button_kb())
+    text = f"✅ @{uname} назначен администратором." if ok else f"⚠️ @{uname} уже администратор."
+    await msg.answer(text, reply_markup=back_button_kb())
     await state.clear()
 
 @admin_router.callback_query(F.data == "remove_admin")
 async def cb_remove_admin(cb: CallbackQuery, state: FSMContext):
-    if not await is_owner(cb.from_user.username):
-        await cb.answer("⛔ Только владелец", show_alert=True); return
+    if not await check_owner_cb(cb): return
     await cb.message.edit_text("Введите @username администратора для снятия прав (без @):", reply_markup=back_button_kb())
     await state.set_state(AdminMgmt.waiting_remove)
     await cb.answer()
@@ -473,13 +434,3 @@ async def do_remove_admin(msg: Message, state: FSMContext):
     await remove_admin(uname)
     await msg.answer(f"✅ Права администратора сняты с @{uname}.", reply_markup=back_button_kb())
     await state.clear()
-
-@admin_router.message(Command("admins"))
-async def cmd_admins(msg: Message):
-    if not await check_owner(msg): return
-    admins = await get_all_admins()
-    text = "👑 <b>Список администраторов</b>\n\n"
-    for a in admins:
-        role = "👑 Владелец" if a["is_owner"] else "🔧 Админ"
-        text += f"{role}: @{a['username']} — {a['full_name']}\n"
-    await msg.answer(text, parse_mode="HTML")
