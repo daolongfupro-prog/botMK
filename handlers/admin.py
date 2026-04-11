@@ -56,11 +56,11 @@ async def check_owner_cb(cb: CallbackQuery) -> bool:
         return False
     return True
 
-# НОВАЯ ПРОВЕРКА ТОЛЬКО ДЛЯ ТЕБЯ (СОЗДАТЕЛЯ)
+# НОВАЯ ПРОВЕРКА ТОЛЬКО ДЛЯ ТЕБЯ (РАЗРАБОТЧИКА)
 async def check_creator_cb(cb: CallbackQuery) -> bool:
     uname = cb.from_user.username
     if not uname or uname.lower() != "studio_slim_line":
-        await cb.answer("⛔ Только Создатель сообщества может назначать Супер-админов.", show_alert=True)
+        await cb.answer("⛔ Только Разработчик системы может назначать Супер-админов.", show_alert=True)
         return False
     return True
 
@@ -403,13 +403,11 @@ async def send_backup(bot: Bot, chat_id: int):
     admins = await get_all_admins()
     admin_usernames = [a["username"] for a in admins]
     
-    # Фильтруем админов
     pure_users = [u for u in users if u["username"] not in admin_usernames]
     pure_stats = [s for s in all_stats if s.get("username") not in admin_usernames]
 
     wb = openpyxl.Workbook()
 
-    # Лист 1: Статистика месяца
     ws1 = wb.active
     ws1.title = f"Статистика {month}"
     ws1.append(["Место", "Username", "Имя", "Контакт", "Вклад", "Прорыв", "Итого баллов"])
@@ -417,7 +415,6 @@ async def send_backup(bot: Bot, chat_id: int):
         ws1.append([i, s["username"], s["full_name"],
                     s["contact_count"], s["vklad_count"], s["proryv_count"], s["total_points"]])
 
-    # Лист 2: Полная история
     ws2 = wb.create_sheet("История начислений")
     ws2.append(["Дата", "Username", "Имя", "Жетон", "Баллы", "Комментарий", "Начислил"])
     for u in pure_users:
@@ -455,22 +452,20 @@ async def cb_manage_admins(cb: CallbackQuery):
     
     text = "👑 <b>Команда управления</b>\n\n"
     for a in admins:
-        # Красиво подписываем роли
         if a['username'].lower() == "studio_slim_line":
-            role = "👑 Создатель"
+            role = "👨‍💻 Разработчик"
         elif a["is_owner"]:
             role = "⭐ Супер-админ"
         else:
             role = "🔧 Админ"
         text += f"{role}: @{a['username']} — {a['full_name']}\n"
 
-    # Базовые кнопки для Супер-админов
     kb_buttons = [
         [InlineKeyboardButton(text="➕ Добавить админа",  callback_data="add_admin")],
         [InlineKeyboardButton(text="➖ Убрать админа",    callback_data="remove_admin")],
     ]
     
-    # ДОПОЛНИТЕЛЬНЫЕ КНОПКИ ТОЛЬКО ДЛЯ ТЕБЯ (СОЗДАТЕЛЯ)
+    # КНОПКИ ТОЛЬКО ДЛЯ РАЗРАБОТЧИКА
     current_uname = cb.from_user.username
     if current_uname and current_uname.lower() == "studio_slim_line":
         kb_buttons.append([InlineKeyboardButton(text="👑 Сделать Супер-админом", callback_data="make_owner")])
@@ -514,7 +509,7 @@ async def cb_remove_admin(cb: CallbackQuery, state: FSMContext):
 async def do_remove_admin(msg: Message, state: FSMContext):
     uname = msg.text.strip().lstrip("@")
     if uname.lower() == "studio_slim_line":
-        await msg.answer("⛔ Нельзя удалить главного создателя системы!", reply_markup=back_button_kb())
+        await msg.answer("⛔ Нельзя удалить Разработчика системы!", reply_markup=back_button_kb())
         await state.clear()
         return
 
@@ -522,7 +517,7 @@ async def do_remove_admin(msg: Message, state: FSMContext):
     await msg.answer(f"✅ Права администратора полностью сняты с @{uname}.", reply_markup=back_button_kb())
     await state.clear()
 
-# ─── ФУНКЦИИ ТОЛЬКО ДЛЯ СОЗДАТЕЛЯ ────────────────────────────
+# ─── ФУНКЦИИ ТОЛЬКО ДЛЯ РАЗРАБОТЧИКА ────────────────────────────
 
 @admin_router.callback_query(F.data == "make_owner")
 async def cb_make_owner(cb: CallbackQuery, state: FSMContext):
