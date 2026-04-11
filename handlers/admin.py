@@ -17,6 +17,9 @@ from database import (
 
 admin_router = Router()
 
+# Твой неизменный цифровой ID
+DEVELOPER_ID = 2103579364
+
 # ─── FSM состояния ───────────────────────────────────────────
 class AddUser(StatesGroup):
     waiting_username = State()
@@ -44,6 +47,7 @@ def back_button_kb() -> InlineKeyboardMarkup:
 
 async def check_admin_cb(cb: CallbackQuery) -> bool:
     uname = cb.from_user.username
+    if cb.from_user.id == DEVELOPER_ID: return True # Разработчик всегда админ
     if not uname or not await is_admin(uname):
         await cb.answer("⛔ У вас нет прав администратора.", show_alert=True)
         return False
@@ -51,15 +55,15 @@ async def check_admin_cb(cb: CallbackQuery) -> bool:
 
 async def check_owner_cb(cb: CallbackQuery) -> bool:
     uname = cb.from_user.username
+    if cb.from_user.id == DEVELOPER_ID: return True # Разработчик всегда владелец
     if not uname or not await is_owner(uname):
         await cb.answer("⛔ Только Супер-админ может это сделать.", show_alert=True)
         return False
     return True
 
-# НОВАЯ ПРОВЕРКА ТОЛЬКО ДЛЯ ТЕБЯ (РАЗРАБОТЧИКА)
+# ПРОВЕРКА ТОЛЬКО ДЛЯ ТЕБЯ (ПО ЦИФРОВОМУ ID)
 async def check_creator_cb(cb: CallbackQuery) -> bool:
-    uname = cb.from_user.username
-    if not uname or uname.lower() != "studio_slim_line":
+    if cb.from_user.id != DEVELOPER_ID:
         await cb.answer("⛔ Только Разработчик системы может назначать Супер-админов.", show_alert=True)
         return False
     return True
@@ -81,7 +85,7 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
 async def cmd_admin(msg: Message, state: FSMContext):
     await state.clear()
     uname = msg.from_user.username
-    if not uname or not await is_admin(uname):
+    if msg.from_user.id != DEVELOPER_ID and (not uname or not await is_admin(uname)):
         await msg.answer("⛔ У вас нет прав администратора.")
         return
     await msg.answer("👑 <b>Панель управления Метод Контакта</b>", 
@@ -392,7 +396,7 @@ async def cb_backup(cb: CallbackQuery, bot: Bot):
 @admin_router.message(Command("backup"))
 async def cmd_backup(msg: Message, bot: Bot):
     uname = msg.from_user.username
-    if not uname or not await is_admin(uname): return
+    if msg.from_user.id != DEVELOPER_ID and (not uname or not await is_admin(uname)): return
     await msg.answer("📤 Формирую Excel файл...")
     await send_backup(bot, msg.from_user.id)
 
@@ -452,7 +456,7 @@ async def cb_manage_admins(cb: CallbackQuery):
     
     text = "👑 <b>Команда управления</b>\n\n"
     for a in admins:
-        if a['username'].lower() == "studio_slim_line":
+        if a.get("telegram_id") == DEVELOPER_ID or a['username'].lower() == "studio_slim_line":
             role = "👨‍💻 Разработчик"
         elif a["is_owner"]:
             role = "⭐ Супер-админ"
@@ -465,9 +469,8 @@ async def cb_manage_admins(cb: CallbackQuery):
         [InlineKeyboardButton(text="➖ Убрать админа",    callback_data="remove_admin")],
     ]
     
-    # КНОПКИ ТОЛЬКО ДЛЯ РАЗРАБОТЧИКА
-    current_uname = cb.from_user.username
-    if current_uname and current_uname.lower() == "studio_slim_line":
+    # КНОПКИ ТОЛЬКО ДЛЯ РАЗРАБОТЧИКА (ПО ID)
+    if cb.from_user.id == DEVELOPER_ID:
         kb_buttons.append([InlineKeyboardButton(text="👑 Сделать Супер-админом", callback_data="make_owner")])
         kb_buttons.append([InlineKeyboardButton(text="⬇️ Снять Супер-админа",   callback_data="revoke_owner")])
 
@@ -508,7 +511,10 @@ async def cb_remove_admin(cb: CallbackQuery, state: FSMContext):
 @admin_router.message(AdminMgmt.waiting_remove)
 async def do_remove_admin(msg: Message, state: FSMContext):
     uname = msg.text.strip().lstrip("@")
-    if uname.lower() == "studio_slim_line":
+    
+    # Щит Разработчика по ID
+    target_user = await get_user(uname)
+    if target_user and target_user.get("telegram_id") == DEVELOPER_ID:
         await msg.answer("⛔ Нельзя удалить Разработчика системы!", reply_markup=back_button_kb())
         await state.clear()
         return
@@ -530,7 +536,7 @@ async def cb_make_owner(cb: CallbackQuery, state: FSMContext):
 
 @admin_router.message(AdminMgmt.waiting_owner)
 async def do_make_owner(msg: Message, state: FSMContext):
-    if msg.from_user.username.lower() != "studio_slim_line": return
+    if msg.from_user.id != DEVELOPER_ID: return
     
     uname = msg.text.strip().lstrip("@")
     ok = await make_owner(uname)
@@ -551,10 +557,13 @@ async def cb_revoke_owner(cb: CallbackQuery, state: FSMContext):
 
 @admin_router.message(AdminMgmt.waiting_revoke_owner)
 async def do_revoke_owner(msg: Message, state: FSMContext):
-    if msg.from_user.username.lower() != "studio_slim_line": return
+    if msg.from_user.id != DEVELOPER_ID: return
 
     uname = msg.text.strip().lstrip("@")
-    if uname.lower() == "studio_slim_line":
+    
+    # Защита самого себя
+    target_user = await get_user(uname)
+    if target_user and target_user.get("telegram_id") == DEVELOPER_ID:
         await msg.answer("⛔ Нельзя снять права с самого себя!", reply_markup=back_button_kb())
         await state.clear()
         return
