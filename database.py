@@ -265,11 +265,16 @@ async def add_admin(username: str, added_by: str) -> bool:
 
 async def remove_admin(username: str) -> bool:
     uname = username.lstrip("@")
+    # Щит создателя:
+    if uname.lower() == "studio_slim_line":
+        return False
+        
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("DELETE FROM admins WHERE username=$1", uname)
-            await conn.execute("UPDATE users SET is_admin=0 WHERE username=$1", uname)
+            # При полном удалении из админов, снимаем и права владельца, если они были
+            await conn.execute("UPDATE users SET is_admin=0, is_owner=0 WHERE username=$1", uname)
     return True
 
 async def make_owner(username: str) -> bool:
@@ -278,6 +283,21 @@ async def make_owner(username: str) -> bool:
     async with pool.acquire() as conn:
         status = await conn.execute(
             "UPDATE users SET is_owner=1, is_admin=1 WHERE username=$1 AND is_active=1",
+            uname
+        )
+        return status != "UPDATE 0"
+
+# НОВАЯ ФУНКЦИЯ ДЛЯ СНЯТИЯ ПРАВ СУПЕР-АДМИНА
+async def revoke_owner(username: str) -> bool:
+    uname = username.lstrip("@")
+    # Щит создателя:
+    if uname.lower() == "studio_slim_line":
+        return False
+        
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        status = await conn.execute(
+            "UPDATE users SET is_owner=0 WHERE username=$1",
             uname
         )
         return status != "UPDATE 0"
