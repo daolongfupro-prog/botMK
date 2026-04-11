@@ -7,8 +7,8 @@ from datetime import datetime
 from image_generator import create_top_image, create_stat_image
 from database import (
     get_user, update_user_tg_id, update_user_photo,
-    get_user_medals, get_monthly_stats, get_current_month,
-    MEDAL_NAMES, is_admin, get_all_admins
+    get_monthly_stats, get_current_month,
+    MEDAL_NAMES, is_admin, get_all_admins, get_user_history
 )
 
 user_router = Router()
@@ -35,32 +35,37 @@ async def cmd_start(msg: Message):
     # Сохраняем ID пользователя для будущих рассылок
     await update_user_tg_id(uname, msg.from_user.id)
 
-    # Получаем статистику только для того, чтобы показать баллы
-    month = get_current_month()
-    stats = await get_monthly_stats(month)
-    user_stat = next((s for s in stats if s["username"] == uname), None)
-    pts = user_stat["total_points"] if user_stat else 0
-
     # Проверяем, админ ли это
     adm = await is_admin(uname)
+    month = get_current_month()
+    all_stats = await get_monthly_stats(month)
+
+    # РАЗДЕЛЯЕМ ЛОГИКУ ПОДСЧЕТА БАЛЛОВ
+    if adm:
+        # Для админов: общее количество выданных баллов участникам
+        admins = await get_all_admins()
+        admin_usernames = [a["username"] for a in admins]
+        # Суммируем баллы всех, кто НЕ является админом
+        pts = sum(s.get("total_points", 0) for s in all_stats if s.get("username") not in admin_usernames)
+        pts_text = f"💎 Выдано баллов участникам за месяц: <b>{pts}</b>"
+        menu_text = f"/admin — панель управления\n"
+    else:
+        # Для обычных участников: их личные баллы
+        user_stat = next((s for s in all_stats if s.get("username") == uname), None)
+        pts = user_stat.get("total_points", 0) if user_stat else 0
+        pts_text = f"💎 Баллов в этом месяце: <b>{pts}</b>"
+        menu_text = f"/my — мои жетоны\n/setphoto — загрузить фото\n"
 
     # Формируем динамическое приветствие
     text = (
         f"👋 Привет, <b>{user['full_name']}</b>!\n\n"
         f"🏅 Сообщество: <b>{COMMUNITY}</b>\n"
-        f"💎 Баллов в этом месяце: <b>{pts}</b>\n\n"
+        f"{pts_text}\n\n"
         f"📋 Доступные команды:\n"
+        f"{menu_text}"
+        f"/top — лидерборд\n"
+        f"/help — помощь"
     )
-
-    # Если админ - показываем админку, скрываем личное
-    if adm:
-        text += f"/admin — панель управления\n"
-    else:
-        text += f"/my — мои жетоны\n"
-        text += f"/setphoto — загрузить фото\n"
-        
-    text += f"/top — лидерборд\n"
-    text += f"/help — помощь"
 
     if user.get("photo_file_id"):
         await msg.answer_photo(user["photo_file_id"], caption=text, parse_mode="HTML")
@@ -80,7 +85,8 @@ async def cmd_my(msg: Message, bot: Bot):
         await msg.answer("❌ Вы не найдены в системе. Обратитесь к организатору.")
         return
 
-    medals = await get_user_medals(uname)
+    # ИСПРАВЛЕНИЕ ОШИБКИ: Используем get_user_history вместо пропавшего get_user_medals
+    medals = await get_user_history(uname, limit=1000)
     current_month = get_current_month()
 
     by_month: dict[str, list] = {}
@@ -98,7 +104,7 @@ async def cmd_my(msg: Message, bot: Bot):
     
     await msg.answer_photo(
         photo=photo, 
-        caption=f"🏅 <b>Жетоны {user['full_name']}</b>", 
+        caption=f"👤 Карточка участника: {user['full_name']}", 
         parse_mode="HTML"
     )
 
@@ -108,7 +114,6 @@ async def cmd_top(msg: Message, bot: Bot):
     month = get_current_month()
     all_stats = await get_monthly_stats(month)
 
-    # --- УМНАЯ ФИЛЬТРАЦИЯ ---
     # Запрашиваем из базы список всех админов и владельца
     admins = await get_all_admins()
     admin_usernames = [a["username"] for a in admins]
@@ -123,7 +128,7 @@ async def cmd_top(msg: Message, bot: Bot):
         
         await msg.answer_photo(
             photo=photo,
-            caption=f"🏆 <b>Топ участников — {month}</b>",
+            caption=f"🏆 <b>Итоги месяца — {month}</b>",
             parse_mode="HTML"
         )
     except Exception as e:
