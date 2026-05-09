@@ -1,3 +1,4 @@
+import traceback
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.filters import Command
@@ -17,6 +18,7 @@ from database import (
     MEDAL_NAMES, MEDAL_LIMITS
 )
 
+# РОУТЕР ДОЛЖЕН БЫТЬ ЗДЕСЬ
 admin_router = Router()
 
 # Твой неизменный цифровой ID
@@ -359,7 +361,9 @@ async def cb_month_stats(cb: CallbackQuery, bot: Bot):
 async def cb_conf_close_m(cb: CallbackQuery):
     if not await check_owner_cb(cb): return
     stats = await get_active_stats()
-    count = sum(s['medal_count'] for s in stats)
+    
+    # Правильный подсчет: суммируем контакт, вклад и прорыв
+    count = sum(s.get('contact_count', 0) + s.get('vklad_count', 0) + s.get('proryv_count', 0) for s in stats)
     
     if count == 0:
         await cb.answer("⚠️ В текущем периоде еще нет жетонов для архивации.", show_alert=True)
@@ -388,14 +392,23 @@ async def cb_exec_close_m(cb: CallbackQuery):
     if not await check_owner_cb(cb): return
     
     await cb.answer("⏳ Обработка архива...", show_alert=False)
-    res = await close_current_month(cb.from_user.username or str(cb.from_user.id))
     
-    text = (
-        "🏁 <b>Период успешно завершен!</b>\n\n"
-        f"Архивировано жетонов: <b>{res['count']}</b>.\n"
-        "Все показатели сброшены. Можно начинать новый учет."
-    )
-    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_button_kb())
+    try:
+        res = await close_current_month(cb.from_user.username or str(cb.from_user.id))
+        count = res.get('count', 0) if isinstance(res, dict) else res
+        
+        text = (
+            "🏁 <b>Период успешно завершен!</b>\n\n"
+            f"Архивировано жетонов: <b>{count}</b>.\n"
+            "Все показатели сброшены. Можно начинать новый учет."
+        )
+        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_button_kb())
+    except Exception as e:
+        print(f"ОШИБКА ЗАКРЫТИЯ ПЕРИОДА:\n{traceback.format_exc()}")
+        await cb.message.edit_text(
+            f"❌ <b>Произошла ошибка базы данных:</b>\n\n<code>{e}</code>", 
+            parse_mode="HTML", reply_markup=back_button_kb()
+        )
 
 @admin_router.callback_query(F.data == "conf_undo_m")
 async def cb_conf_undo_m(cb: CallbackQuery):
@@ -409,7 +422,8 @@ async def cb_conf_undo_m(cb: CallbackQuery):
     breakdown = await get_closure_breakdown(info['id'])
     
     current_activity = await get_active_stats()
-    new_medals_count = sum(s['medal_count'] for s in current_activity)
+    # Правильный подсчет для новых жетонов
+    new_medals_count = sum(s.get('contact_count', 0) + s.get('vklad_count', 0) + s.get('proryv_count', 0) for s in current_activity)
 
     user_list = "\n".join([f"• {b['full_name']}: {b['medal_count']} шт." for b in breakdown[:10]])
     if len(breakdown) > 10:
@@ -443,19 +457,28 @@ async def cb_exec_undo_m(cb: CallbackQuery):
     if not await check_owner_cb(cb): return
     
     await cb.answer("⏳ Восстановление данных...", show_alert=False)
-    res = await undo_last_closure()
     
-    if res["success"]:
-        text = (
-            "✅ <b>Откат успешно выполнен!</b>\n\n"
-            f"Восстановлено из архива: <b>{res['count']}</b> жетонов.\n"
-            "Текущий период снова активен."
+    try:
+        res = await undo_last_closure()
+        success = res.get("success", False) if isinstance(res, dict) else bool(res)
+        count = res.get('count', '?') if isinstance(res, dict) else res
+        
+        if success:
+            text = (
+                "✅ <b>Откат успешно выполнен!</b>\n\n"
+                f"Восстановлено из архива: <b>{count}</b> жетонов.\n"
+                "Текущий период снова активен."
+            )
+            await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_button_kb())
+        else:
+            await cb.message.edit_text("❌ <b>Ошибка отката.</b>\nВозможно, архив уже был изменен или пуст.", 
+                                      parse_mode="HTML", reply_markup=back_button_kb())
+    except Exception as e:
+        print(f"ОШИБКА ОТКАТА:\n{traceback.format_exc()}")
+        await cb.message.edit_text(
+            f"❌ <b>Произошла ошибка базы данных:</b>\n\n<code>{e}</code>", 
+            parse_mode="HTML", reply_markup=back_button_kb()
         )
-        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_button_kb())
-    else:
-        await cb.message.edit_text("❌ <b>Ошибка отката.</b>\nВозможно, архив уже был изменен или пуст.", 
-                                  parse_mode="HTML", reply_markup=back_button_kb())
-    await cb.answer()
 
 # ─── EXCEL БЭКАП ─────────────────────────────────────────────
 async def send_backup(bot: Bot, chat_id: int):
