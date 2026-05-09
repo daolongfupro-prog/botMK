@@ -13,12 +13,11 @@ from database import (
     award_medal, cancel_last_medal, check_weekly_limit,
     get_monthly_stats, get_active_stats, get_user_history, get_current_month,
     add_admin, remove_admin, make_owner, revoke_owner, get_all_admins, is_admin, is_owner,
-    save_congrats, close_current_month, undo_last_closure, 
+    save_congrats, get_congrats, close_current_month, undo_last_closure, 
     get_last_closure_info, get_closure_breakdown,
     MEDAL_NAMES, MEDAL_LIMITS
 )
 
-# РОУТЕР ДОЛЖЕН БЫТЬ ЗДЕСЬ
 admin_router = Router()
 
 # Твой неизменный цифровой ID
@@ -361,8 +360,6 @@ async def cb_month_stats(cb: CallbackQuery, bot: Bot):
 async def cb_conf_close_m(cb: CallbackQuery):
     if not await check_owner_cb(cb): return
     stats = await get_active_stats()
-    
-    # Правильный подсчет: суммируем контакт, вклад и прорыв
     count = sum(s.get('contact_count', 0) + s.get('vklad_count', 0) + s.get('proryv_count', 0) for s in stats)
     
     if count == 0:
@@ -390,19 +387,65 @@ async def cb_conf_close_m(cb: CallbackQuery):
 @admin_router.callback_query(F.data == "exec_close_m")
 async def cb_exec_close_m(cb: CallbackQuery):
     if not await check_owner_cb(cb): return
-    
-    await cb.answer("⏳ Обработка архива...", show_alert=False)
+    await cb.answer("⏳ Подводим итоги и закрываем период...", show_alert=False)
     
     try:
+        # 1. Получаем статистику ДО того, как закроем месяц (чтобы было что отправлять в группу)
+        stats = await get_active_stats()
+        admins = [a["username"] for a in await get_all_admins()]
+        filtered_stats = [s for s in stats if s["username"] not in admins]
+        
+        # 2. Закрываем период в базе (жетоны становятся is_active=0)
         res = await close_current_month(cb.from_user.username or str(cb.from_user.id))
         count = res.get('count', 0) if isinstance(res, dict) else res
         
-        text = (
+        # 3. Системное сообщение для админа с кнопкой назад
+        sys_text = (
             "🏁 <b>Период успешно завершен!</b>\n\n"
             f"Архивировано жетонов: <b>{count}</b>.\n"
-            "Все показатели сброшены. Можно начинать новый учет."
+            "Все показатели сброшены. Можно начинать новый учет.\n\n"
+            "👇 <i>Ниже сформирован готовый пост с итогами. Вы можете просто переслать его в группу.</i>"
         )
-        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=back_button_kb())
+        await cb.message.edit_text(sys_text, parse_mode="HTML", reply_markup=back_button_kb())
+        
+        # 4. Формируем красивый пост для пересылки в группу
+        if filtered_stats:
+            month_name = datetime.now().strftime("%m.%Y")
+            post_text = f"🏆 <b>Итоги периода ({month_name}) — Метод Контакта</b>\n\n"
+            
+            medals_emoji = ["🥇", "🥈", "🥉"]
+            top3 = filtered_stats[:3]
+            rest = filtered_stats[3:]
+            
+            # Выводим Топ-3
+            for i, s in enumerate(top3):
+                post_text += (
+                    f"{medals_emoji[i]} <b>{s['full_name']}</b>\n"
+                    f"   ⭐×{s['contact_count']} 💛×{s['vklad_count']} 🔥×{s['proryv_count']} "
+                    f"│ <b>{s['total_points']} балл(ов)</b>\n\n"
+                )
+            
+            # Выводим остальных
+            if rest:
+                post_text += "───────────────\n"
+                for i, s in enumerate(rest, 4):
+                    post_text += f"{i}. {s['full_name']} — {s['total_points']} балл(ов)\n"
+                post_text += "\n"
+            
+            post_text += "───────────────\n"
+            
+            # Добавляем текст кастомного поздравления, если админ его заранее написал
+            congrats = await get_congrats(get_current_month())
+            if congrats and congrats.get("congrats_text"):
+                post_text += f"{congrats['congrats_text']}\n\n"
+            else:
+                post_text += "Отличная работа всем участникам! 🌟 Каждый жетон — это реальный шаг и изменение. Гордимся каждым! 💪\n\n"
+            
+            post_text += "Новый период начался! Вперёд, к новым целям! 🚀"
+            
+            # Отправляем этот пост отдельным сообщением в админку
+            await cb.message.answer(post_text, parse_mode="HTML")
+            
     except Exception as e:
         print(f"ОШИБКА ЗАКРЫТИЯ ПЕРИОДА:\n{traceback.format_exc()}")
         await cb.message.edit_text(
@@ -422,7 +465,6 @@ async def cb_conf_undo_m(cb: CallbackQuery):
     breakdown = await get_closure_breakdown(info['id'])
     
     current_activity = await get_active_stats()
-    # Правильный подсчет для новых жетонов
     new_medals_count = sum(s.get('contact_count', 0) + s.get('vklad_count', 0) + s.get('proryv_count', 0) for s in current_activity)
 
     user_list = "\n".join([f"• {b['full_name']}: {b['medal_count']} шт." for b in breakdown[:10]])
