@@ -1,12 +1,9 @@
 import os
 import logging
-from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
 
-from database import (
-    get_active_stats, get_all_users, get_current_month
-)
+from database import get_active_stats, get_all_users
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +49,15 @@ async def send_closure_reminder(bot: Bot):
             return
 
         text = (
-            "🔔 <b>Напоминание: Начало нового месяца!</b>\n\n"
-            "В системе остались незакрытые итоги прошлого периода.\n"
+            "🔔 <b>Напоминание: Начало нового периода!</b>\n\n"
+            "В системе остались незакрытые итоги прошлого месяца.\n"
             "Пожалуйста, зайдите в <code>/admin</code> и нажмите <b>'Завершить период'</b>, "
-            "чтобы обнулить статистику и отправить поздравления в канал."
+            "чтобы перевести жетоны в архив и начать отсчет с чистого листа."
         )
 
         users = await get_all_users()
-        owner = next((u for u in users if u["username"] == OWNER_USERNAME), None)
+        # Ищем владельца без учета регистра букв (для надежности)
+        owner = next((u for u in users if u["username"].lower() == OWNER_USERNAME.lower()), None)
         
         if owner and owner.get("telegram_id"):
             await bot.send_message(owner["telegram_id"], text, parse_mode="HTML")
@@ -76,7 +74,7 @@ async def send_weekly_backup(bot: Bot):
         # Импорт внутри, чтобы избежать циклической зависимости
         from handlers.admin import send_backup
         users = await get_all_users()
-        owner = next((u for u in users if u["username"] == OWNER_USERNAME), None)
+        owner = next((u for u in users if u["username"].lower() == OWNER_USERNAME.lower()), None)
         
         if owner and owner.get("telegram_id"):
             # Отправляем актуальный бэкап в личку
